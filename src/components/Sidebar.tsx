@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Folder, Users, Settings, LogOut, TerminalSquare } from "lucide-react";
+import { LayoutDashboard, Folder, Users, Settings, LogOut, TerminalSquare, Wallet } from "lucide-react";
 
 export function Sidebar() {
     const pathname = usePathname();
@@ -11,7 +11,8 @@ export function Sidebar() {
         { name: "Dashboard", href: "/", icon: LayoutDashboard },
         { name: "Projetos", href: "/projects", icon: Folder },
         { name: "Usuários", href: "/users", icon: Users },
-        { name: "Configurações", href: "/settings", icon: Settings },
+        { name: 'Financeiro', href: '/financeiro', icon: Wallet },
+        { name: "Configurações", href: "/settings", icon: Settings }
     ];
 
     return (

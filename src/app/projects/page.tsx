@@ -6,7 +6,7 @@ import {
     Search, Plus, Clock, MoreVertical, Zap, Terminal, X, CheckCircle2, Circle,
     Trash2, AlertTriangle, ShieldCheck, UserCog, Activity, ChevronDown,
     AlignLeft, CheckSquare, Paperclip, UploadCloud, FileText, Image as ImageIcon,
-    User, ArrowUpRight, Users
+    User, ArrowUpRight, Users, Link, Wallet, Banknote, FileCheck, Landmark, Receipt
 } from "lucide-react";
 
 export default function ProjectsBoard() {
@@ -20,7 +20,7 @@ export default function ProjectsBoard() {
 
     // 🔹 ESTADOS DO PAINEL LATERAL PREMIUM
     const [selectedProject, setSelectedProject] = useState<any>(null);
-    const [activeTab, setActiveTab] = useState<"tarefas" | "briefing" | "arquivos" | "membros">("tarefas");
+    const [activeTab, setActiveTab] = useState<"tarefas" | "briefing" | "arquivos" | "membros" | "financeiro">("tarefas");
     const [tasks, setTasks] = useState<any[]>([]);
     const [newTaskTitle, setNewTaskTitle] = useState("");
     const [members, setMembers] = useState<any[]>([]);
@@ -28,6 +28,13 @@ export default function ProjectsBoard() {
     const [attachments, setAttachments] = useState<any[]>([]);
     const [projectDescription, setProjectDescription] = useState("");
     const [isSavingDesc, setIsSavingDesc] = useState(false);
+
+    // 🔹 ESTADOS DO MÓDULO FINANCEIRO
+    const [financeData, setFinanceData] = useState({ total_value: 0, maintenance_value: 0, payment_model: '50/50' });
+    const [installments, setInstallments] = useState<any[]>([]);
+    const [financeDocs, setFinanceDocs] = useState<any[]>([]);
+    const [isSavingFinance, setIsSavingFinance] = useState(false);
+    const [isUploadingDoc, setIsUploadingDoc] = useState(false);
 
     // 🔹 MENUS FLUTUANTES E DRAG & DROP
     const [openMenuId, setOpenMenuId] = useState<string | null>(null);
@@ -43,6 +50,7 @@ export default function ProjectsBoard() {
         const channel = supabase
             .channel('projects-live')
             .on('postgres_changes', { event: '*', schema: 'public', table: 'projects' }, () => fetchProjects())
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'finance_installments' }, () => { if (selectedProject) fetchFinanceData(selectedProject.id); })
             .subscribe();
 
         const handleClickOutside = () => { setOpenMenuId(null); setOpenStatusMenuId(null); };
@@ -52,7 +60,7 @@ export default function ProjectsBoard() {
             supabase.removeChannel(channel);
             document.removeEventListener("click", handleClickOutside);
         };
-    }, []);
+    }, [selectedProject]);
 
     const fetchProjects = async () => {
         setIsLoading(true);
@@ -61,13 +69,26 @@ export default function ProjectsBoard() {
         setIsLoading(false);
     };
 
+    const fetchFinanceData = async (projectId: any) => {
+        const { data: instData } = await supabase.from("finance_installments").select("*").eq("project_id", projectId).order("created_at", { ascending: true });
+        const { data: fDocsData } = await supabase.from("finance_docs").select("*").eq("project_id", projectId).order("created_at", { ascending: false });
+        if (instData) setInstallments(instData);
+        if (fDocsData) setFinanceDocs(fDocsData);
+    };
+
     const logActivity = async (action: string, msg: string, projName: string) => {
         const { data: { session } } = await supabase.auth.getSession();
         const op = session?.user?.user_metadata?.full_name?.split(" ")[0] || "Operador";
         await supabase.from("activity_logs").insert([{ operator_name: op, action_type: action, message: msg, project_name: projName }]);
     };
 
-    // 🔹 FUNÇÕES DE CRUD DO PROJETO
+    const handleCopyTrackingLink = () => {
+        if (!selectedProject || !selectedProject.tracking_code) return alert("Erro: Código de rastreio não encontrado.");
+        const trackingUrl = `${window.location.origin}/tracking/${selectedProject.tracking_code}`;
+        navigator.clipboard.writeText(trackingUrl);
+        alert("LINK COPIADO! Envia agora para o teu cliente.");
+    };
+
     const handleCreateProject = async (e: React.FormEvent) => {
         e.preventDefault();
         try {
@@ -75,11 +96,7 @@ export default function ProjectsBoard() {
             const userId = session?.user?.id;
             if (!userId) return alert("Sessão expirada!");
 
-            const { error } = await supabase
-                .from("projects")
-                .insert([{ name: newProject.name, client: newProject.client, phase: "Briefing", user_id: userId }])
-                .select();
-
+            const { error } = await supabase.from("projects").insert([{ name: newProject.name, client: newProject.client, phase: "Briefing", user_id: userId }]).select();
             if (error) throw error;
             logActivity("CREATE", `instanciou a operação: ${newProject.name}`, "Sistema");
             setIsModalOpen(false);
@@ -108,10 +125,14 @@ export default function ProjectsBoard() {
         }
     };
 
-    // 🔹 FUNÇÕES DO PAINEL LATERAL E TAREFAS
     const handleOpenProject = async (project: any) => {
         setSelectedProject(project);
         setProjectDescription(project.description || "");
+        setFinanceData({
+            total_value: project.total_value || 0,
+            maintenance_value: project.maintenance_value || 0,
+            payment_model: project.payment_model || '50/50'
+        });
         setActiveTab("tarefas");
         setIsLoadingTasks(true);
 
@@ -122,6 +143,7 @@ export default function ProjectsBoard() {
         if (tData) setTasks(tData);
         if (fData) setAttachments(fData);
         if (mData) setMembers(mData);
+        await fetchFinanceData(project.id);
         setIsLoadingTasks(false);
     };
 
@@ -129,11 +151,7 @@ export default function ProjectsBoard() {
         e.preventDefault();
         if (!newTaskTitle.trim() || !selectedProject) return;
         const { data } = await supabase.from("tasks").insert([{ project_id: selectedProject.id, title: newTaskTitle, status: 'pending' }]).select();
-        if (data) {
-            setTasks([data[0], ...tasks]);
-            logActivity("TASK", `injetou o protocolo "${newTaskTitle}"`, selectedProject.name);
-            setNewTaskTitle("");
-        }
+        if (data) { setTasks([data[0], ...tasks]); logActivity("TASK", `injetou o protocolo "${newTaskTitle}"`, selectedProject.name); setNewTaskTitle(""); }
     };
 
     const toggleTaskStatus = async (task: any) => {
@@ -147,47 +165,85 @@ export default function ProjectsBoard() {
         if (!selectedProject) return;
         setIsSavingDesc(true);
         try {
-            const { error } = await supabase.from("projects").update({ description: projectDescription }).eq("id", selectedProject.id);
-            if (error) throw error;
+            await supabase.from("projects").update({ description: projectDescription }).eq("id", selectedProject.id);
             setProjects((prev) => prev.map(p => p.id === selectedProject.id ? { ...p, description: projectDescription } : p));
             logActivity("UPDATE", `atualizou protocolos de Data_Brief`, selectedProject.name);
-        } catch (error: any) {
-            alert("FALHA: " + error.message);
-        } finally {
-            setIsSavingDesc(false);
-        }
+        } catch (error: any) { alert("FALHA: " + error.message); } finally { setIsSavingDesc(false); }
     };
 
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file || !selectedProject) return;
-
         try {
             setIsLoadingTasks(true);
             const filePath = `${selectedProject.id}/${Math.random()}.${file.name.split('.').pop()}`;
             await supabase.storage.from('project-assets').upload(filePath, file);
             const { data: { publicUrl } } = supabase.storage.from('project-assets').getPublicUrl(filePath);
-
-            const { data: newAttach } = await supabase.from("attachments").insert([{
-                project_id: selectedProject.id, file_name: file.name, file_url: publicUrl, file_type: file.type
-            }]).select();
-
+            const { data: newAttach } = await supabase.from("attachments").insert([{ project_id: selectedProject.id, file_name: file.name, file_url: publicUrl, file_type: file.type }]).select();
             if (newAttach) setAttachments([newAttach[0], ...attachments]);
             logActivity("FILE", `injetou o asset "${file.name}" no Vault`, selectedProject.name);
         } finally { setIsLoadingTasks(false); }
     };
 
-    // 🔹 DRAG & DROP E UI HELPERS
-    const handleDragStart = (e: React.DragEvent, projectId: any) => {
-        e.dataTransfer.setData("projectId", String(projectId));
+    // 🔹 FUNÇÕES FINANCEIRAS
+    const saveFinanceSettings = async () => {
+        if (!selectedProject) return;
+        setIsSavingFinance(true);
+        try {
+            await supabase.from("projects").update({
+                total_value: financeData.total_value,
+                maintenance_value: financeData.maintenance_value,
+                payment_model: financeData.payment_model
+            }).eq("id", selectedProject.id);
+            setProjects((prev) => prev.map(p => p.id === selectedProject.id ? { ...p, ...financeData } : p));
+            logActivity("FINANCE", `atualizou os parâmetros financeiros`, selectedProject.name);
+            alert("Parâmetros financeiros gravados no cofre!");
+        } catch (error: any) { alert("FALHA: " + error.message); } finally { setIsSavingFinance(false); }
     };
 
+    const generateInstallments = async () => {
+        if (!selectedProject || financeData.total_value <= 0) return alert("Defina um valor total maior que zero primeiro.");
+        if (financeData.payment_model === '50/50') {
+            const half = financeData.total_value / 2;
+            const newInstallments = [
+                { project_id: selectedProject.id, description: "Sinal (50%)", amount: half, status: 'pending' },
+                { project_id: selectedProject.id, description: "Entrega (50%)", amount: half, status: 'pending' }
+            ];
+            await supabase.from("finance_installments").insert(newInstallments);
+            logActivity("FINANCE", `gerou a esteira de cobrança 50/50`, selectedProject.name);
+            fetchFinanceData(selectedProject.id);
+        } else {
+            alert("Para modelos customizados, crie as parcelas manualmente (Em breve).");
+        }
+    };
+
+    const markInstallmentPaid = async (instId: any, currentStatus: string) => {
+        const newStatus = currentStatus === 'paid' ? 'pending' : 'paid';
+        await supabase.from("finance_installments").update({ status: newStatus, paid_at: newStatus === 'paid' ? new Date().toISOString() : null }).eq("id", instId);
+        logActivity("FINANCE", `marcou a parcela como ${newStatus === 'paid' ? 'PAGA' : 'PENDENTE'}`, selectedProject.name);
+        fetchFinanceData(selectedProject.id);
+    };
+
+    const handleFinanceDocUpload = async (e: React.ChangeEvent<HTMLInputElement>, docType: string) => {
+        const file = e.target.files?.[0];
+        if (!file || !selectedProject) return;
+        try {
+            setIsUploadingDoc(true);
+            const filePath = `finance/${selectedProject.id}/${Math.random()}.${file.name.split('.').pop()}`;
+            await supabase.storage.from('project-assets').upload(filePath, file);
+            const { data: { publicUrl } } = supabase.storage.from('project-assets').getPublicUrl(filePath);
+            await supabase.from("finance_docs").insert([{ project_id: selectedProject.id, doc_type: docType, file_name: file.name, file_url: publicUrl }]);
+            logActivity("FINANCE_DOC", `injetou um documento financeiro (${docType})`, selectedProject.name);
+            fetchFinanceData(selectedProject.id);
+        } catch (err: any) { alert("Erro ao fazer upload: " + err.message); } finally { setIsUploadingDoc(false); }
+    };
+
+    // 🔹 DRAG & DROP
+    const handleDragStart = (e: React.DragEvent, projectId: any) => { e.dataTransfer.setData("projectId", String(projectId)); };
     const handleDrop = async (e: React.DragEvent, newPhase: string) => {
-        e.preventDefault();
-        setDraggedOverPhase(null);
+        e.preventDefault(); setDraggedOverPhase(null);
         const projectId = e.dataTransfer.getData("projectId");
         const projectToMove = projects.find(p => String(p.id) === projectId);
-
         if (projectToMove && projectToMove.phase !== newPhase) {
             await supabase.from("projects").update({ phase: newPhase }).eq("id", projectId);
             logActivity("PHASE", `moveu para "${newPhase}"`, projectToMove.name);
@@ -197,14 +253,9 @@ export default function ProjectsBoard() {
 
     const getPhaseColor = (phase: string) => {
         switch (phase) {
-            case "Briefing": return "bg-yellow-500";
-            case "Design": return "bg-pink-500";
-            case "Desenvolvimento": return "bg-blue-500";
-            case "QA / Performance": return "bg-purple-500";
-            case "Aguard. Cliente": return "bg-orange-500";
-            case "Travado": return "bg-red-500";
-            case "Entregue": return "bg-synx";
-            default: return "bg-zinc-500";
+            case "Briefing": return "bg-yellow-500"; case "Design": return "bg-pink-500"; case "Desenvolvimento": return "bg-blue-500";
+            case "QA / Performance": return "bg-purple-500"; case "Aguard. Cliente": return "bg-orange-500";
+            case "Travado": return "bg-red-500"; case "Entregue": return "bg-synx"; default: return "bg-zinc-500";
         }
     };
 
@@ -218,10 +269,15 @@ export default function ProjectsBoard() {
 
     const taskProgress = tasks.length > 0 ? Math.round((tasks.filter(t => t.status === 'completed').length / tasks.length) * 100) : 0;
 
+    // Prevenção de divisão por zero no progresso financeiro
+    const totalAmount = installments.reduce((acc, curr) => acc + Number(curr.amount), 0);
+    const paidAmount = installments.filter(i => i.status === 'paid').reduce((acc, curr) => acc + Number(curr.amount), 0);
+    const financeProgress = totalAmount > 0 ? Math.round((paidAmount / totalAmount) * 100) : 0;
+
     return (
         <div className="h-screen w-full flex flex-col bg-[#020202] text-white overflow-hidden p-6 lg:p-10">
 
-            {/* 🔹 HEADER */}
+            {/* 🔹 HEADER KANBAN */}
             <header className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-10 shrink-0">
                 <div className="space-y-1">
                     <div className="flex items-center gap-2 text-synx opacity-80"><Terminal size={14} /><span className="text-[10px] font-mono font-bold uppercase tracking-[0.3em]">Operational_Board</span></div>
@@ -238,33 +294,24 @@ export default function ProjectsBoard() {
                 </div>
             </header>
 
-            {/* 🔹 KANBAN AREA */}
+            {/* 🔹 KANBAN COLUNAS */}
             <main className="flex-1 overflow-x-auto pb-6 custom-scrollbar">
                 <div className="flex gap-8 h-full min-w-max px-2">
                     {phases.map((phase) => {
-                        const phaseProjects = projects.filter(p => (p.phase === phase || (!p.phase && phase === "Briefing")) &&
-                            (p.name?.toLowerCase().includes(searchTerm.toLowerCase())));
-
+                        const phaseProjects = projects.filter(p => (p.phase === phase || (!p.phase && phase === "Briefing")) && (p.name?.toLowerCase().includes(searchTerm.toLowerCase())));
                         return (
                             <div key={phase} onDragOver={(e) => { e.preventDefault(); setDraggedOverPhase(phase); }} onDragLeave={() => setDraggedOverPhase(null)} onDrop={(e) => handleDrop(e, phase)}
                                 className={`w-80 flex flex-col rounded-[32px] p-4 transition-all duration-300 ${draggedOverPhase === phase ? 'bg-synx/5 border border-synx/20 shadow-[0_0_40px_rgba(16,185,129,0.05)]' : 'bg-white/[0.02] border border-white/5'}`}>
                                 <div className="flex items-center justify-between mb-6 px-2">
-                                    <div className="flex items-center gap-3">
-                                        <div className={`w-1.5 h-6 rounded-full ${getPhaseColor(phase)}`} />
-                                        <h3 className="text-[11px] font-black uppercase tracking-widest text-zinc-400">{phase}</h3>
-                                    </div>
+                                    <div className="flex items-center gap-3"><div className={`w-1.5 h-6 rounded-full ${getPhaseColor(phase)}`} /><h3 className="text-[11px] font-black uppercase tracking-widest text-zinc-400">{phase}</h3></div>
                                     <span className="text-[10px] font-mono text-zinc-600 bg-white/5 px-2 py-0.5 rounded-lg">{phaseProjects.length}</span>
                                 </div>
-
                                 <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
                                     {phaseProjects.map((project) => (
                                         <div key={project.id} draggable onDragStart={(e) => handleDragStart(e, project.id)} onClick={() => handleOpenProject(project)}
                                             className={`bg-white/[0.03] border p-6 rounded-[24px] hover:bg-white/[0.05] transition-all group cursor-grab active:cursor-grabbing relative ${project.status === 'Travado' ? 'border-red-500/30' : 'border-white/10 hover:border-synx/40'}`}>
-
                                             <div className="relative z-20 mb-3">
-                                                <button onClick={(e) => { e.stopPropagation(); setOpenStatusMenuId(openStatusMenuId === project.id ? null : project.id); setOpenMenuId(null); }} className="text-left hover:brightness-125 transition-all">
-                                                    {renderStatusTag(project.status)}
-                                                </button>
+                                                <button onClick={(e) => { e.stopPropagation(); setOpenStatusMenuId(openStatusMenuId === project.id ? null : project.id); setOpenMenuId(null); }} className="text-left hover:brightness-125 transition-all">{renderStatusTag(project.status)}</button>
                                                 {openStatusMenuId === project.id && (
                                                     <div className="absolute left-0 top-8 w-48 bg-[#0a0a0a] border border-white/10 rounded-xl shadow-[0_0_30px_rgba(0,0,0,1)] z-[100] overflow-hidden animate-in fade-in zoom-in-95">
                                                         <button onClick={(e) => handleChangeStatus(project.id, "Normal", e)} className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-synx hover:bg-white/5"><Activity size={12} /> Operando Normal</button>
@@ -274,7 +321,6 @@ export default function ProjectsBoard() {
                                                     </div>
                                                 )}
                                             </div>
-
                                             <div className="flex justify-between items-start mb-4 relative z-10">
                                                 <div>
                                                     <h4 className="text-sm font-bold tracking-tight mb-1 group-hover:text-synx transition-colors">{project.name}</h4>
@@ -287,7 +333,6 @@ export default function ProjectsBoard() {
                                                     </div>
                                                 )}
                                             </div>
-
                                             <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden mb-2"><div className="h-full bg-synx transition-all duration-1000" style={{ width: `${project.progress || 0}%` }} /></div>
                                             <div className="flex justify-between text-[8px] font-black text-zinc-600 uppercase tracking-widest"><span>Efficiency</span><span>{project.progress || 0}%</span></div>
                                         </div>
@@ -303,33 +348,143 @@ export default function ProjectsBoard() {
             {selectedProject && (
                 <>
                     <div className="fixed inset-0 bg-black/40 backdrop-blur-md z-[200] animate-in fade-in" onClick={() => setSelectedProject(null)} />
-                    <div className="fixed inset-y-4 right-4 w-full md:w-[750px] bg-[#050505] border border-white/10 z-[210] rounded-[48px] shadow-2xl flex flex-col animate-in slide-in-from-right duration-700 overflow-hidden">
+                    <div className="fixed inset-y-4 right-4 w-full md:w-[850px] bg-[#050505] border border-white/10 z-[210] rounded-[48px] shadow-2xl flex flex-col animate-in slide-in-from-right duration-700 overflow-hidden">
 
                         <div className="p-12 pb-8 bg-gradient-to-br from-white/[0.03] to-transparent shrink-0">
                             <div className="flex justify-between items-start">
                                 <div className="space-y-6">
                                     <div className={`px-4 py-1.5 rounded-full border text-[10px] font-black uppercase tracking-widest bg-white/5 inline-block ${getPhaseColor(selectedProject.phase).replace('bg-', 'text-')} ${getPhaseColor(selectedProject.phase).replace('bg-', 'border-')}/30`}>{selectedProject.phase}</div>
                                     <h2 className="text-6xl font-black italic tracking-tighter uppercase leading-none text-white">{selectedProject.name}</h2>
-                                    <p className="text-sm font-mono text-synx tracking-widest flex items-center gap-2"><User size={14} /> Cliente: <span className="text-white">{selectedProject.client}</span></p>
+                                    <div className="flex items-center gap-6">
+                                        <p className="text-sm font-mono text-synx tracking-widest flex items-center gap-2"><User size={14} /> Cliente: <span className="text-white">{selectedProject.client}</span></p>
+                                        <button onClick={handleCopyTrackingLink} className="flex items-center gap-2 px-3 py-1.5 bg-white/[0.05] border border-white/10 rounded-lg text-[9px] font-black uppercase tracking-widest text-zinc-400 hover:text-synx hover:border-synx/30 transition-all"><Link size={12} /> Copiar Link Cliente</button>
+                                    </div>
                                 </div>
                                 <button onClick={() => setSelectedProject(null)} className="bg-white/5 hover:bg-red-500/20 hover:text-red-500 p-4 rounded-3xl transition-all border border-white/10"><X size={24} /></button>
                             </div>
 
-                            <div className="flex gap-10 mt-16 border-b border-white/5">
+                            {/* TABS NAVEGAÇÃO */}
+                            <div className="flex gap-10 mt-16 border-b border-white/5 overflow-x-auto custom-scrollbar pb-2">
                                 {[
                                     { id: 'tarefas', label: 'Protocolos', icon: CheckSquare },
                                     { id: 'briefing', label: 'Data_Brief', icon: AlignLeft },
                                     { id: 'arquivos', label: 'Vault', icon: Paperclip },
+                                    { id: 'financeiro', label: 'Caixa Forte', icon: Wallet },
                                     { id: 'membros', label: 'Equipe', icon: Users }
                                 ].map((tab) => (
-                                    <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={`pb-6 flex items-center gap-3 text-[11px] font-black uppercase tracking-widest transition-all relative ${activeTab === tab.id ? 'text-synx' : 'text-zinc-600 hover:text-zinc-400'}`}>
+                                    <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={`pb-4 flex items-center gap-3 text-[11px] font-black uppercase tracking-widest transition-all relative whitespace-nowrap ${activeTab === tab.id ? 'text-synx' : 'text-zinc-600 hover:text-zinc-400'}`}>
                                         <tab.icon size={16} />{tab.label}{activeTab === tab.id && <div className="absolute bottom-0 left-0 w-full h-[2px] bg-synx shadow-[0_0_10px_#10b981]" />}</button>
                                 ))}
                             </div>
                         </div>
 
                         <div className="flex-1 overflow-y-auto p-12 custom-scrollbar bg-[#050505]">
-                            {/* TAB TAREFAS */}
+
+                            {/* 🔹 TAB CAIXA FORTE (FINANCEIRO) */}
+                            {activeTab === "financeiro" && (
+                                <div className="space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
+
+                                    {/* KPI FINANCEIRO HEADER */}
+                                    <div className="grid grid-cols-2 gap-6">
+                                        <div className="bg-gradient-to-br from-synx/10 to-transparent border border-synx/20 p-8 rounded-[40px] flex items-center gap-6">
+                                            <div className="w-16 h-16 rounded-full bg-synx/20 text-synx flex items-center justify-center border border-synx/30"><Landmark size={24} /></div>
+                                            <div>
+                                                <p className="text-[10px] font-black text-synx uppercase tracking-widest mb-1">Caixa Total Recebido</p>
+                                                <h4 className="text-3xl font-black italic text-white tracking-tighter">
+                                                    R$ {paidAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                                </h4>
+                                            </div>
+                                        </div>
+                                        <div className="bg-white/[0.02] border border-white/5 p-8 rounded-[40px] flex items-center gap-6">
+                                            <div className="w-16 h-16 rounded-full bg-white/5 text-zinc-500 flex items-center justify-center border border-white/10"><Banknote size={24} /></div>
+                                            <div>
+                                                <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1">Progresso Financeiro</p>
+                                                <h4 className="text-3xl font-black italic text-white tracking-tighter">{financeProgress}% Pago</h4>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
+
+                                        {/* COLUNA 1: PARAMETRIZAÇÃO */}
+                                        <div className="space-y-8">
+                                            <div><h3 className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.4em] mb-6">Parametrização do Contrato</h3></div>
+                                            <div className="space-y-6 bg-[#080808] border border-white/5 p-8 rounded-[32px]">
+                                                <div className="space-y-2 group">
+                                                    <label className="text-[9px] font-black text-zinc-500 uppercase ml-2 tracking-widest">Valor Total (R$)</label>
+                                                    <input type="number" value={financeData.total_value} onChange={(e) => setFinanceData({ ...financeData, total_value: Number(e.target.value) })} className="w-full bg-black border border-white/10 rounded-2xl px-5 py-3 text-sm font-bold text-white focus:border-synx outline-none transition-all" />
+                                                </div>
+                                                <div className="space-y-2 group">
+                                                    <label className="text-[9px] font-black text-zinc-500 uppercase ml-2 tracking-widest">MRR / Manutenção (R$)</label>
+                                                    <input type="number" value={financeData.maintenance_value} onChange={(e) => setFinanceData({ ...financeData, maintenance_value: Number(e.target.value) })} className="w-full bg-black border border-white/10 rounded-2xl px-5 py-3 text-sm font-bold text-white focus:border-synx outline-none transition-all" />
+                                                </div>
+                                                <div className="space-y-2 group">
+                                                    <label className="text-[9px] font-black text-zinc-500 uppercase ml-2 tracking-widest">Modelo de Cobrança</label>
+                                                    <select value={financeData.payment_model} onChange={(e) => setFinanceData({ ...financeData, payment_model: e.target.value })} className="w-full bg-black border border-white/10 rounded-2xl px-5 py-3 text-sm font-bold text-zinc-300 focus:border-synx outline-none transition-all appearance-none">
+                                                        <option value="50/50">50% Sinal / 50% Entrega</option>
+                                                        <option value="custom">Customizado (Manual)</option>
+                                                    </select>
+                                                </div>
+                                                <button onClick={saveFinanceSettings} disabled={isSavingFinance} className="w-full bg-white/5 hover:bg-synx hover:text-black border border-white/10 text-white py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all mt-4">
+                                                    {isSavingFinance ? "Salvando..." : "Gravar Parâmetros"}
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        {/* COLUNA 2: ESTEIRA DE COBRANÇA */}
+                                        <div className="space-y-8">
+                                            <div className="flex justify-between items-center"><h3 className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.4em]">Esteira de Parcelas</h3>
+                                                <button onClick={generateInstallments} className="text-[9px] font-black text-synx border-b border-synx/30 pb-0.5 hover:border-synx uppercase tracking-widest transition-all">Gerar Auto (50/50)</button>
+                                            </div>
+                                            <div className="space-y-4">
+                                                {installments.length === 0 && <p className="text-xs font-mono text-zinc-600 border border-dashed border-white/10 p-6 rounded-3xl text-center">Nenhuma fatura lançada.</p>}
+                                                {installments.map((inst) => (
+                                                    <div key={inst.id} className={`p-5 rounded-[24px] border transition-all flex items-center justify-between group ${inst.status === 'paid' ? 'bg-synx/5 border-synx/30' : 'bg-[#080808] border-white/10 hover:border-white/30'}`}>
+                                                        <div>
+                                                            <p className={`text-xs font-black uppercase tracking-wider ${inst.status === 'paid' ? 'text-synx' : 'text-white'}`}>{inst.description}</p>
+                                                            <p className="text-[10px] font-mono text-zinc-500 mt-1">R$ {Number(inst.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                                                        </div>
+                                                        <button onClick={() => markInstallmentPaid(inst.id, inst.status)} className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all ${inst.status === 'paid' ? 'bg-synx text-black' : 'bg-white/5 text-zinc-600 hover:bg-white/10 hover:text-white'}`}>
+                                                            <CheckCircle2 size={14} />
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                    </div>
+
+                                    {/* COFRE BUROCRÁTICO (UPLOAD NF E CONTRATO) */}
+                                    <div className="mt-12 border-t border-white/5 pt-12">
+                                        <h3 className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.4em] mb-8">Cofre Burocrático (NFs e Contratos)</h3>
+                                        <div className="grid grid-cols-2 gap-6 mb-8">
+                                            <label className="border border-dashed border-white/10 hover:border-synx/50 transition-all rounded-[32px] p-8 flex flex-col items-center justify-center bg-[#080808] cursor-pointer group">
+                                                <input type="file" className="hidden" onChange={(e) => handleFinanceDocUpload(e, 'contract')} disabled={isUploadingDoc} />
+                                                <FileCheck size={24} className="text-zinc-600 group-hover:text-synx mb-3 transition-colors" />
+                                                <span className="text-[10px] font-black text-white uppercase tracking-widest">Subir Contrato</span>
+                                            </label>
+                                            <label className="border border-dashed border-white/10 hover:border-synx/50 transition-all rounded-[32px] p-8 flex flex-col items-center justify-center bg-[#080808] cursor-pointer group">
+                                                <input type="file" className="hidden" onChange={(e) => handleFinanceDocUpload(e, 'invoice')} disabled={isUploadingDoc} />
+                                                <Receipt size={24} className="text-zinc-600 group-hover:text-synx mb-3 transition-colors" />
+                                                <span className="text-[10px] font-black text-white uppercase tracking-widest">Subir Nota Fiscal (NF)</span>
+                                            </label>
+                                        </div>
+
+                                        <div className="space-y-3">
+                                            {financeDocs.map((doc) => (
+                                                <a key={doc.id} href={doc.file_url} target="_blank" rel="noreferrer" className="flex items-center gap-4 p-4 bg-[#080808] border border-white/5 rounded-2xl hover:border-white/20 transition-all">
+                                                    <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-zinc-400"><FileText size={16} /></div>
+                                                    <div className="flex-1"><p className="text-xs font-bold text-white">{doc.file_name}</p><p className="text-[9px] font-mono text-synx uppercase mt-1">{doc.doc_type === 'contract' ? 'Contrato Assinado' : 'Nota Fiscal Emitida'}</p></div>
+                                                    <ArrowUpRight size={16} className="text-zinc-600" />
+                                                </a>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                </div>
+                            )}
+
+                            {/* TABS ANTIGAS OMITIDAS NO RESUMO, MAS MANTIDAS NO CÓDIGO FINAL */}
                             {activeTab === "tarefas" && (
                                 <div className="space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
                                     <div className="grid grid-cols-3 gap-6">
@@ -359,7 +514,6 @@ export default function ProjectsBoard() {
                                 </div>
                             )}
 
-                            {/* TAB BRIEFING */}
                             {activeTab === "briefing" && (
                                 <div className="h-full flex flex-col space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
                                     <div className="flex justify-between items-center"><div className="flex items-center gap-3"><AlignLeft className="text-synx" size={18} /><span className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.3em]">Encrypted_Notes</span></div><button onClick={saveDescription} disabled={isSavingDesc} className="bg-synx text-black px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:brightness-110 shadow-[0_0_20px_rgba(16,185,129,0.2)]">{isSavingDesc ? 'Sincronizando...' : 'Commit_Changes'}</button></div>
@@ -367,7 +521,6 @@ export default function ProjectsBoard() {
                                 </div>
                             )}
 
-                            {/* TAB ARQUIVOS */}
                             {activeTab === "arquivos" && (
                                 <div className="space-y-10 animate-in fade-in slide-in-from-bottom-4 duration-700">
                                     <input type="file" id="file-upload" className="hidden" onChange={handleFileUpload} disabled={isLoadingTasks} />
@@ -387,7 +540,6 @@ export default function ProjectsBoard() {
                                 </div>
                             )}
 
-                            {/* TAB EQUIPE */}
                             {activeTab === "membros" && (
                                 <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
                                     <div className="flex justify-between items-center"><h3 className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.4em]">Operadores_Ativos</h3><button className="bg-white/5 hover:bg-synx hover:text-black p-2 rounded-xl border border-white/10"><Plus size={16} /></button></div>
@@ -399,10 +551,11 @@ export default function ProjectsBoard() {
                                                 <div className="w-2 h-2 rounded-full bg-synx animate-pulse" />
                                             </div>
                                         ))}
-                                        {members.length === 0 && <div className="py-20 text-center border border-dashed border-white/5 rounded-[32px]"><p className="text-[10px] font-mono text-zinc-700 uppercase tracking-widest">Apenas você no comando.</p></div>}
+                                        {members.length === 0 && <div className="py-20 text-center border border-dashed border-white/5 rounded-[32px]"><p className="text-[10px] font-mono text-zinc-700 uppercase tracking-widest">Apenas tu no comando.</p></div>}
                                     </div>
                                 </div>
                             )}
+
                         </div>
                     </div>
                 </>

@@ -6,14 +6,16 @@ import { usePathname } from "next/navigation";
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const isLoginPage = pathname === "/login";
+
+  // 🔹 A MÁGICA AQUI: Esconde a Sidebar no Login E no Portal do Cliente
+  const isPublicPage = pathname === "/login" || pathname.startsWith("/tracking");
 
   return (
     <html lang="pt-br">
       <body className="bg-[#020202] text-white antialiased font-sans">
 
-        {isLoginPage ? (
-          <main className="w-screen h-screen overflow-hidden bg-[#020202]">
+        {isPublicPage ? (
+          <main className="w-screen h-screen overflow-x-hidden overflow-y-auto bg-[#020202] custom-scrollbar">
             {children}
           </main>
         ) : (
