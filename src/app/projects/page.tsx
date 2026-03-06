@@ -6,7 +6,8 @@ import {
     Search, Plus, Clock, MoreVertical, Zap, Terminal, X, CheckCircle2, Circle,
     Trash2, AlertTriangle, ShieldCheck, UserCog, Activity, ChevronDown,
     AlignLeft, CheckSquare, Paperclip, UploadCloud, FileText, Image as ImageIcon,
-    User, ArrowUpRight, Users, Link, Wallet, Banknote, FileCheck, Landmark, Receipt
+    User, ArrowUpRight, Link, Wallet, Banknote, FileCheck, Landmark, Receipt,
+    DollarSign, PlusCircle, Trash, Github
 } from "lucide-react";
 
 export default function ProjectsBoard() {
@@ -14,16 +15,16 @@ export default function ProjectsBoard() {
     const [isLoading, setIsLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState("");
 
-    // 🔹 ESTADOS DO MODAL "NOVO ESCOPO"
+    // 🔹 ESTADOS DO NOVO ESCOPO (CRM)
     const [isModalOpen, setIsModalOpen] = useState(false);
-    const [newProject, setNewProject] = useState({ name: "", client: "" });
+    const [clients, setClients] = useState<any[]>([]);
+    const [newProject, setNewProject] = useState({ name: "", client_id: "" });
 
     // 🔹 ESTADOS DO PAINEL LATERAL PREMIUM
     const [selectedProject, setSelectedProject] = useState<any>(null);
-    const [activeTab, setActiveTab] = useState<"tarefas" | "briefing" | "arquivos" | "membros" | "financeiro">("tarefas");
+    const [activeTab, setActiveTab] = useState<"tarefas" | "briefing" | "arquivos" | "financeiro" | "repositorio">("tarefas");
     const [tasks, setTasks] = useState<any[]>([]);
     const [newTaskTitle, setNewTaskTitle] = useState("");
-    const [members, setMembers] = useState<any[]>([]);
     const [isLoadingTasks, setIsLoadingTasks] = useState(false);
     const [attachments, setAttachments] = useState<any[]>([]);
     const [projectDescription, setProjectDescription] = useState("");
@@ -35,9 +36,9 @@ export default function ProjectsBoard() {
     const [financeDocs, setFinanceDocs] = useState<any[]>([]);
     const [isSavingFinance, setIsSavingFinance] = useState(false);
     const [isUploadingDoc, setIsUploadingDoc] = useState(false);
+    const [newCustomInstallment, setNewCustomInstallment] = useState({ description: "", amount: "" });
+    const [isAddingCustomInstallment, setIsAddingCustomInstallment] = useState(false);
 
-    // 🔹 MENUS FLUTUANTES E DRAG & DROP
-    const [openMenuId, setOpenMenuId] = useState<string | null>(null);
     const [openStatusMenuId, setOpenStatusMenuId] = useState<string | null>(null);
     const [draggedOverPhase, setDraggedOverPhase] = useState<string | null>(null);
 
@@ -46,6 +47,7 @@ export default function ProjectsBoard() {
     // 🔹 INICIALIZAÇÃO E REALTIME
     useEffect(() => {
         fetchProjects();
+        fetchUsersAsClients();
 
         const channel = supabase
             .channel('projects-live')
@@ -53,7 +55,7 @@ export default function ProjectsBoard() {
             .on('postgres_changes', { event: '*', schema: 'public', table: 'finance_installments' }, () => { if (selectedProject) fetchFinanceData(selectedProject.id); })
             .subscribe();
 
-        const handleClickOutside = () => { setOpenMenuId(null); setOpenStatusMenuId(null); };
+        const handleClickOutside = () => setOpenStatusMenuId(null);
         document.addEventListener("click", handleClickOutside);
 
         return () => {
@@ -67,6 +69,17 @@ export default function ProjectsBoard() {
         const { data } = await supabase.from("projects").select("*").order("id", { ascending: false });
         if (data) setProjects(data);
         setIsLoading(false);
+    };
+
+    const fetchUsersAsClients = async () => {
+        try {
+            const { data, error } = await supabase.from("profiles").select("*").order("full_name", { ascending: true });
+            if (error) throw error;
+            if (data) {
+                const onlyClients = data.filter(u => u.role && String(u.role).toLowerCase().includes('cliente'));
+                setClients(onlyClients.length > 0 ? onlyClients : data);
+            }
+        } catch (err) { console.log("Aviso ao buscar clientes:", err); }
     };
 
     const fetchFinanceData = async (projectId: any) => {
@@ -89,20 +102,26 @@ export default function ProjectsBoard() {
         alert("LINK COPIADO! Envia agora para o teu cliente.");
     };
 
+    // 🔹 AÇÕES DO PROJETO
     const handleCreateProject = async (e: React.FormEvent) => {
         e.preventDefault();
         try {
             const { data: { session } } = await supabase.auth.getSession();
             const userId = session?.user?.id;
             if (!userId) return alert("Sessão expirada!");
+            if (!newProject.client_id) return alert("Selecione um cliente cadastrado.");
 
-            const { error } = await supabase.from("projects").insert([{ name: newProject.name, client: newProject.client, phase: "Briefing", user_id: userId }]).select();
+            const selectedClient = clients.find(c => String(c.id) === String(newProject.client_id));
+            const clientName = selectedClient ? (selectedClient.full_name || selectedClient.name || "Desconhecido") : "Desconhecido";
+
+            const { error } = await supabase.from("projects").insert([{ name: newProject.name, client_id: newProject.client_id, client: clientName, phase: "Briefing", user_id: userId }]).select();
             if (error) throw error;
+
             logActivity("CREATE", `instanciou a operação: ${newProject.name}`, "Sistema");
             setIsModalOpen(false);
-            setNewProject({ name: "", client: "" });
+            setNewProject({ name: "", client_id: "" });
             fetchProjects();
-        } catch (err: any) { alert(err.message); }
+        } catch (err: any) { alert("Falha ao criar projeto: " + err.message); }
     };
 
     const handleChangeStatus = async (projectId: any, newStatus: string, e: React.MouseEvent) => {
@@ -114,39 +133,35 @@ export default function ProjectsBoard() {
         logActivity("STATUS", `marcou status como "${newStatus}"`, projectToUpdate?.name || "");
     };
 
-    const handleDeleteProject = async (id: any, e: React.MouseEvent) => {
-        e.stopPropagation();
-        const projectToDelete = projects.find(p => String(p.id) === String(id));
-        if (confirm("Deseja apagar esta operação permanentemente?")) {
-            await supabase.from("projects").delete().eq("id", id);
-            setProjects((prev) => prev.filter(p => String(p.id) !== String(id)));
-            setOpenMenuId(null);
-            logActivity("DELETE", `excluiu a operação`, projectToDelete?.name || "");
+    const handleDeleteProject = async () => {
+        if (!selectedProject) return;
+        if (confirm(`ALERTA: Deseja apagar permanentemente a operação "${selectedProject.name}"? Esta ação não pode ser desfeita.`)) {
+            try {
+                await supabase.from("projects").delete().eq("id", selectedProject.id);
+                setProjects((prev) => prev.filter(p => String(p.id) !== String(selectedProject.id)));
+                logActivity("DELETE", `excluiu a operação`, selectedProject.name);
+                setSelectedProject(null);
+            } catch (err: any) { alert("Falha ao excluir operação: " + err.message); }
         }
     };
 
     const handleOpenProject = async (project: any) => {
         setSelectedProject(project);
         setProjectDescription(project.description || "");
-        setFinanceData({
-            total_value: project.total_value || 0,
-            maintenance_value: project.maintenance_value || 0,
-            payment_model: project.payment_model || '50/50'
-        });
+        setFinanceData({ total_value: project.total_value || 0, maintenance_value: project.maintenance_value || 0, payment_model: project.payment_model || '50/50' });
         setActiveTab("tarefas");
         setIsLoadingTasks(true);
 
         const { data: tData } = await supabase.from("tasks").select("*").eq("project_id", project.id).order("created_at", { ascending: false });
         const { data: fData } = await supabase.from("attachments").select("*").eq("project_id", project.id).order("created_at", { ascending: false });
-        const { data: mData } = await supabase.from("project_members").select("*, users:user_id(full_name)").eq("project_id", project.id);
 
         if (tData) setTasks(tData);
         if (fData) setAttachments(fData);
-        if (mData) setMembers(mData);
         await fetchFinanceData(project.id);
         setIsLoadingTasks(false);
     };
 
+    // 🔹 TAREFAS E ARQUIVOS
     const handleAddTask = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!newTaskTitle.trim() || !selectedProject) return;
@@ -185,43 +200,67 @@ export default function ProjectsBoard() {
         } finally { setIsLoadingTasks(false); }
     };
 
-    // 🔹 FUNÇÕES FINANCEIRAS
+    // 🔹 FINANCEIRO
     const saveFinanceSettings = async () => {
         if (!selectedProject) return;
         setIsSavingFinance(true);
         try {
-            await supabase.from("projects").update({
-                total_value: financeData.total_value,
-                maintenance_value: financeData.maintenance_value,
-                payment_model: financeData.payment_model
-            }).eq("id", selectedProject.id);
+            await supabase.from("projects").update({ total_value: financeData.total_value, maintenance_value: financeData.maintenance_value, payment_model: financeData.payment_model }).eq("id", selectedProject.id);
             setProjects((prev) => prev.map(p => p.id === selectedProject.id ? { ...p, ...financeData } : p));
             logActivity("FINANCE", `atualizou os parâmetros financeiros`, selectedProject.name);
             alert("Parâmetros financeiros gravados no cofre!");
-        } catch (error: any) { alert("FALHA: " + error.message); } finally { setIsSavingFinance(false); }
+        } catch (error: any) { alert("FALHA AO SALVAR PARÂMETROS: " + error.message); } finally { setIsSavingFinance(false); }
     };
 
     const generateInstallments = async () => {
         if (!selectedProject || financeData.total_value <= 0) return alert("Defina um valor total maior que zero primeiro.");
         if (financeData.payment_model === '50/50') {
-            const half = financeData.total_value / 2;
-            const newInstallments = [
-                { project_id: selectedProject.id, description: "Sinal (50%)", amount: half, status: 'pending' },
-                { project_id: selectedProject.id, description: "Entrega (50%)", amount: half, status: 'pending' }
-            ];
-            await supabase.from("finance_installments").insert(newInstallments);
-            logActivity("FINANCE", `gerou a esteira de cobrança 50/50`, selectedProject.name);
-            fetchFinanceData(selectedProject.id);
-        } else {
-            alert("Para modelos customizados, crie as parcelas manualmente (Em breve).");
+            try {
+                const half = financeData.total_value / 2;
+                const newInstallments = [
+                    { project_id: selectedProject.id, description: "Sinal (50%)", amount: half, status: 'pending' },
+                    { project_id: selectedProject.id, description: "Entrega (50%)", amount: half, status: 'pending' }
+                ];
+                await supabase.from("finance_installments").insert(newInstallments);
+                logActivity("FINANCE", `gerou a esteira de cobrança 50/50`, selectedProject.name);
+                fetchFinanceData(selectedProject.id);
+                alert("Faturas geradas com sucesso!");
+            } catch (error: any) { alert("FALHA AO GERAR FATURAS: " + error.message); }
         }
     };
 
+    const handleAddCustomInstallment = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!newCustomInstallment.description || !newCustomInstallment.amount) return;
+        try {
+            await supabase.from("finance_installments").insert([{
+                project_id: selectedProject.id,
+                description: newCustomInstallment.description,
+                amount: Number(newCustomInstallment.amount),
+                status: 'pending'
+            }]);
+            logActivity("FINANCE", `injetou uma parcela customizada (${newCustomInstallment.description})`, selectedProject.name);
+            fetchFinanceData(selectedProject.id);
+            setNewCustomInstallment({ description: "", amount: "" });
+            setIsAddingCustomInstallment(false);
+        } catch (error: any) { alert("FALHA AO CRIAR PARCELA: " + error.message); }
+    };
+
     const markInstallmentPaid = async (instId: any, currentStatus: string) => {
-        const newStatus = currentStatus === 'paid' ? 'pending' : 'paid';
-        await supabase.from("finance_installments").update({ status: newStatus, paid_at: newStatus === 'paid' ? new Date().toISOString() : null }).eq("id", instId);
-        logActivity("FINANCE", `marcou a parcela como ${newStatus === 'paid' ? 'PAGA' : 'PENDENTE'}`, selectedProject.name);
-        fetchFinanceData(selectedProject.id);
+        try {
+            const newStatus = currentStatus === 'paid' ? 'pending' : 'paid';
+            await supabase.from("finance_installments").update({ status: newStatus, paid_at: newStatus === 'paid' ? new Date().toISOString() : null }).eq("id", instId);
+            logActivity("FINANCE", `marcou a parcela como ${newStatus === 'paid' ? 'PAGA' : 'PENDENTE'}`, selectedProject.name);
+            fetchFinanceData(selectedProject.id);
+        } catch (error: any) { alert("FALHA AO MARCAR PAGAMENTO: " + error.message); }
+    };
+
+    const handleDeleteInstallment = async (instId: any) => {
+        if (confirm("Apagar esta fatura do sistema?")) {
+            await supabase.from("finance_installments").delete().eq("id", instId);
+            fetchFinanceData(selectedProject.id);
+            logActivity("FINANCE", `excluiu uma fatura do sistema`, selectedProject.name);
+        }
     };
 
     const handleFinanceDocUpload = async (e: React.ChangeEvent<HTMLInputElement>, docType: string) => {
@@ -235,19 +274,64 @@ export default function ProjectsBoard() {
             await supabase.from("finance_docs").insert([{ project_id: selectedProject.id, doc_type: docType, file_name: file.name, file_url: publicUrl }]);
             logActivity("FINANCE_DOC", `injetou um documento financeiro (${docType})`, selectedProject.name);
             fetchFinanceData(selectedProject.id);
-        } catch (err: any) { alert("Erro ao fazer upload: " + err.message); } finally { setIsUploadingDoc(false); }
+        } catch (err: any) { alert("ERRO AO UPAR DOCUMENTO: " + err.message); } finally { setIsUploadingDoc(false); }
     };
 
-    // 🔹 DRAG & DROP
+    const handleDeleteFinanceDoc = async (docId: any) => {
+        if (confirm("Apagar este documento permanentemente?")) {
+            await supabase.from("finance_docs").delete().eq("id", docId);
+            fetchFinanceData(selectedProject.id);
+        }
+    };
+
+    // 🔹 DRAG & DROP COM GATILHO DE WEBHOOK (NOTIFICAÇÃO)
     const handleDragStart = (e: React.DragEvent, projectId: any) => { e.dataTransfer.setData("projectId", String(projectId)); };
+
     const handleDrop = async (e: React.DragEvent, newPhase: string) => {
-        e.preventDefault(); setDraggedOverPhase(null);
+        e.preventDefault();
+        setDraggedOverPhase(null);
+
         const projectId = e.dataTransfer.getData("projectId");
         const projectToMove = projects.find(p => String(p.id) === projectId);
+
         if (projectToMove && projectToMove.phase !== newPhase) {
+            const oldPhase = projectToMove.phase || "Briefing";
+
+            // 1. ATUALIZA A TELA E O BANCO DE DADOS
             await supabase.from("projects").update({ phase: newPhase }).eq("id", projectId);
             logActivity("PHASE", `moveu para "${newPhase}"`, projectToMove.name);
             fetchProjects();
+
+            // 2. BUSCA O EMAIL DO CLIENTE NA TABELA DE PERFIS
+            let clientEmail = "sem-email@sistema.com";
+            if (projectToMove.client_id) {
+                const { data: clientData } = await supabase
+                    .from("profiles")
+                    .select("email")
+                    .eq("id", projectToMove.client_id)
+                    .single();
+                if (clientData?.email) clientEmail = clientData.email;
+            }
+
+            // 3. DISPARA O MOTOR DE NOTIFICAÇÃO (WEBHOOK)
+            try {
+                const trackingUrl = `${window.location.origin}/tracking/${projectToMove.tracking_code}`;
+                await fetch("/api/notify", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        projectName: projectToMove.name,
+                        clientName: projectToMove.client,
+                        clientEmail: clientEmail,
+                        oldPhase: oldPhase,
+                        newPhase: newPhase,
+                        trackingUrl: trackingUrl
+                    })
+                });
+                console.log(`Gatilho de notificação disparado para a fase: ${newPhase}`);
+            } catch (err) {
+                console.error("Falha ao comunicar com o motor de notificações:", err);
+            }
         }
     };
 
@@ -267,11 +351,11 @@ export default function ProjectsBoard() {
         return <span className="bg-zinc-800/50 text-zinc-400 border border-zinc-700/50 px-2 py-1.5 rounded-md text-[9px] font-black uppercase tracking-widest flex items-center gap-1.5 w-max transition-colors hover:bg-zinc-700/50"><Zap size={12} /> Status Pendente <ChevronDown size={10} className="ml-1 opacity-50" /></span>;
     };
 
+    // 🔹 CÁLCULOS KPI
     const taskProgress = tasks.length > 0 ? Math.round((tasks.filter(t => t.status === 'completed').length / tasks.length) * 100) : 0;
-
-    // Prevenção de divisão por zero no progresso financeiro
-    const totalAmount = installments.reduce((acc, curr) => acc + Number(curr.amount), 0);
+    const totalAmount = financeData.total_value > 0 ? financeData.total_value : installments.reduce((acc, curr) => acc + Number(curr.amount), 0);
     const paidAmount = installments.filter(i => i.status === 'paid').reduce((acc, curr) => acc + Number(curr.amount), 0);
+    const pendingAmount = installments.filter(i => i.status !== 'paid').reduce((acc, curr) => acc + Number(curr.amount), 0);
     const financeProgress = totalAmount > 0 ? Math.round((paidAmount / totalAmount) * 100) : 0;
 
     return (
@@ -311,7 +395,7 @@ export default function ProjectsBoard() {
                                         <div key={project.id} draggable onDragStart={(e) => handleDragStart(e, project.id)} onClick={() => handleOpenProject(project)}
                                             className={`bg-white/[0.03] border p-6 rounded-[24px] hover:bg-white/[0.05] transition-all group cursor-grab active:cursor-grabbing relative ${project.status === 'Travado' ? 'border-red-500/30' : 'border-white/10 hover:border-synx/40'}`}>
                                             <div className="relative z-20 mb-3">
-                                                <button onClick={(e) => { e.stopPropagation(); setOpenStatusMenuId(openStatusMenuId === project.id ? null : project.id); setOpenMenuId(null); }} className="text-left hover:brightness-125 transition-all">{renderStatusTag(project.status)}</button>
+                                                <button onClick={(e) => { e.stopPropagation(); setOpenStatusMenuId(openStatusMenuId === project.id ? null : project.id); }} className="text-left hover:brightness-125 transition-all">{renderStatusTag(project.status)}</button>
                                                 {openStatusMenuId === project.id && (
                                                     <div className="absolute left-0 top-8 w-48 bg-[#0a0a0a] border border-white/10 rounded-xl shadow-[0_0_30px_rgba(0,0,0,1)] z-[100] overflow-hidden animate-in fade-in zoom-in-95">
                                                         <button onClick={(e) => handleChangeStatus(project.id, "Normal", e)} className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-synx hover:bg-white/5"><Activity size={12} /> Operando Normal</button>
@@ -326,12 +410,6 @@ export default function ProjectsBoard() {
                                                     <h4 className="text-sm font-bold tracking-tight mb-1 group-hover:text-synx transition-colors">{project.name}</h4>
                                                     <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">{project.client}</p>
                                                 </div>
-                                                <button onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === project.id ? null : project.id); setOpenStatusMenuId(null); }} className="text-zinc-600 hover:text-white transition-colors"><MoreVertical size={16} /></button>
-                                                {openMenuId === project.id && (
-                                                    <div className="absolute right-0 top-6 w-40 bg-[#0a0a0a] border border-white/10 rounded-xl shadow-[0_0_30px_rgba(0,0,0,1)] z-[100] overflow-hidden animate-in fade-in zoom-in-95">
-                                                        <button onClick={(e) => handleDeleteProject(project.id, e)} className="w-full flex items-center gap-2 px-4 py-3 text-xs font-bold text-red-500/80 hover:bg-red-500/10 hover:text-red-500"><Trash2 size={12} /> Excluir</button>
-                                                    </div>
-                                                )}
                                             </div>
                                             <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden mb-2"><div className="h-full bg-synx transition-all duration-1000" style={{ width: `${project.progress || 0}%` }} /></div>
                                             <div className="flex justify-between text-[8px] font-black text-zinc-600 uppercase tracking-widest"><span>Efficiency</span><span>{project.progress || 0}%</span></div>
@@ -348,7 +426,7 @@ export default function ProjectsBoard() {
             {selectedProject && (
                 <>
                     <div className="fixed inset-0 bg-black/40 backdrop-blur-md z-[200] animate-in fade-in" onClick={() => setSelectedProject(null)} />
-                    <div className="fixed inset-y-4 right-4 w-full md:w-[850px] bg-[#050505] border border-white/10 z-[210] rounded-[48px] shadow-2xl flex flex-col animate-in slide-in-from-right duration-700 overflow-hidden">
+                    <div className="fixed inset-y-4 right-4 w-full md:w-[900px] bg-[#050505] border border-white/10 z-[210] rounded-[48px] shadow-2xl flex flex-col animate-in slide-in-from-right duration-700 overflow-hidden">
 
                         <div className="p-12 pb-8 bg-gradient-to-br from-white/[0.03] to-transparent shrink-0">
                             <div className="flex justify-between items-start">
@@ -360,17 +438,25 @@ export default function ProjectsBoard() {
                                         <button onClick={handleCopyTrackingLink} className="flex items-center gap-2 px-3 py-1.5 bg-white/[0.05] border border-white/10 rounded-lg text-[9px] font-black uppercase tracking-widest text-zinc-400 hover:text-synx hover:border-synx/30 transition-all"><Link size={12} /> Copiar Link Cliente</button>
                                     </div>
                                 </div>
-                                <button onClick={() => setSelectedProject(null)} className="bg-white/5 hover:bg-red-500/20 hover:text-red-500 p-4 rounded-3xl transition-all border border-white/10"><X size={24} /></button>
+
+                                <div className="flex gap-2">
+                                    <button onClick={handleDeleteProject} className="bg-white/5 hover:bg-red-500/20 hover:text-red-500 p-4 rounded-3xl transition-all border border-white/10 text-zinc-500 group relative" title="Excluir Projeto">
+                                        <Trash2 size={24} />
+                                    </button>
+                                    <button onClick={() => setSelectedProject(null)} className="bg-white/5 hover:bg-synx hover:text-black p-4 rounded-3xl transition-all border border-white/10 text-white" title="Fechar Painel">
+                                        <X size={24} />
+                                    </button>
+                                </div>
                             </div>
 
-                            {/* TABS NAVEGAÇÃO */}
+                            {/* TABS NAVEGAÇÃO (Sem a aba Equipe) */}
                             <div className="flex gap-10 mt-16 border-b border-white/5 overflow-x-auto custom-scrollbar pb-2">
                                 {[
                                     { id: 'tarefas', label: 'Protocolos', icon: CheckSquare },
                                     { id: 'briefing', label: 'Data_Brief', icon: AlignLeft },
                                     { id: 'arquivos', label: 'Vault', icon: Paperclip },
                                     { id: 'financeiro', label: 'Caixa Forte', icon: Wallet },
-                                    { id: 'membros', label: 'Equipe', icon: Users }
+                                    { id: 'repositorio', label: 'Código (Git)', icon: Github }
                                 ].map((tab) => (
                                     <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={`pb-4 flex items-center gap-3 text-[11px] font-black uppercase tracking-widest transition-all relative whitespace-nowrap ${activeTab === tab.id ? 'text-synx' : 'text-zinc-600 hover:text-zinc-400'}`}>
                                         <tab.icon size={16} />{tab.label}{activeTab === tab.id && <div className="absolute bottom-0 left-0 w-full h-[2px] bg-synx shadow-[0_0_10px_#10b981]" />}</button>
@@ -380,103 +466,168 @@ export default function ProjectsBoard() {
 
                         <div className="flex-1 overflow-y-auto p-12 custom-scrollbar bg-[#050505]">
 
-                            {/* 🔹 TAB CAIXA FORTE (FINANCEIRO) */}
+                            {/* 💰💰💰 TAB CAIXA FORTE 💰💰💰 */}
                             {activeTab === "financeiro" && (
                                 <div className="space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
 
-                                    {/* KPI FINANCEIRO HEADER */}
-                                    <div className="grid grid-cols-2 gap-6">
-                                        <div className="bg-gradient-to-br from-synx/10 to-transparent border border-synx/20 p-8 rounded-[40px] flex items-center gap-6">
-                                            <div className="w-16 h-16 rounded-full bg-synx/20 text-synx flex items-center justify-center border border-synx/30"><Landmark size={24} /></div>
-                                            <div>
-                                                <p className="text-[10px] font-black text-synx uppercase tracking-widest mb-1">Caixa Total Recebido</p>
-                                                <h4 className="text-3xl font-black italic text-white tracking-tighter">
-                                                    R$ {paidAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                                                </h4>
-                                            </div>
+                                    {/* KPI DASHBOARD INTERNO (3 BLOCOS PREMIUM) */}
+                                    <div className="grid grid-cols-3 gap-6">
+                                        <div className="bg-white/[0.02] border border-white/5 p-6 rounded-[32px] flex flex-col justify-center relative overflow-hidden group">
+                                            <div className="absolute -right-4 -top-4 w-20 h-20 bg-white/5 rounded-full blur-2xl" />
+                                            <div className="w-10 h-10 rounded-xl bg-white/5 text-zinc-400 flex items-center justify-center border border-white/10 mb-4"><Landmark size={18} /></div>
+                                            <p className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-1">Valor do Contrato</p>
+                                            <h4 className="text-2xl font-black italic text-white tracking-tighter truncate">
+                                                R$ {Number(totalAmount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                            </h4>
                                         </div>
-                                        <div className="bg-white/[0.02] border border-white/5 p-8 rounded-[40px] flex items-center gap-6">
-                                            <div className="w-16 h-16 rounded-full bg-white/5 text-zinc-500 flex items-center justify-center border border-white/10"><Banknote size={24} /></div>
-                                            <div>
-                                                <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1">Progresso Financeiro</p>
-                                                <h4 className="text-3xl font-black italic text-white tracking-tighter">{financeProgress}% Pago</h4>
-                                            </div>
+
+                                        <div className="bg-gradient-to-br from-synx/10 to-transparent border border-synx/20 p-6 rounded-[32px] flex flex-col justify-center relative overflow-hidden">
+                                            <div className="absolute -right-4 -top-4 w-20 h-20 bg-synx/20 rounded-full blur-2xl" />
+                                            <div className="w-10 h-10 rounded-xl bg-synx/20 text-synx flex items-center justify-center border border-synx/30 mb-4"><DollarSign size={18} /></div>
+                                            <p className="text-[9px] font-black text-synx uppercase tracking-widest mb-1">Caixa Recebido</p>
+                                            <h4 className="text-2xl font-black italic text-white tracking-tighter truncate">
+                                                R$ {paidAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                            </h4>
+                                        </div>
+
+                                        <div className="bg-white/[0.02] border border-white/5 p-6 rounded-[32px] flex flex-col justify-center relative overflow-hidden">
+                                            <div className="absolute -right-4 -top-4 w-20 h-20 bg-amber-500/10 rounded-full blur-2xl" />
+                                            <div className="w-10 h-10 rounded-xl bg-amber-500/10 text-amber-500 flex items-center justify-center border border-amber-500/20 mb-4"><Clock size={18} /></div>
+                                            <p className="text-[9px] font-black text-amber-500/70 uppercase tracking-widest mb-1">Saldo a Receber</p>
+                                            <h4 className="text-2xl font-black italic text-white tracking-tighter truncate">
+                                                R$ {pendingAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                            </h4>
                                         </div>
                                     </div>
 
-                                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
+                                    {/* BARRA DE PROGRESSO GERAL */}
+                                    <div className="bg-[#080808] border border-white/5 rounded-full p-2 flex items-center gap-4">
+                                        <span className="text-[10px] font-black italic text-zinc-500 pl-4 w-12">{financeProgress}%</span>
+                                        <div className="flex-1 h-3 bg-white/5 rounded-full overflow-hidden">
+                                            <div className="h-full bg-gradient-to-r from-synx to-teal-400 rounded-full shadow-[0_0_15px_rgba(16,185,129,0.5)] transition-all duration-1000" style={{ width: `${financeProgress}%` }} />
+                                        </div>
+                                        <span className="text-[9px] font-mono text-zinc-600 uppercase pr-4">Quitado</span>
+                                    </div>
 
-                                        {/* COLUNA 1: PARAMETRIZAÇÃO */}
-                                        <div className="space-y-8">
-                                            <div><h3 className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.4em] mb-6">Parametrização do Contrato</h3></div>
+                                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 pt-4">
+
+                                        {/* COLUNA ESQUERDA: PARAMETRIZAÇÃO */}
+                                        <div className="space-y-6">
+                                            <h3 className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.4em] flex items-center gap-2"><AlignLeft size={12} /> Parametrização</h3>
                                             <div className="space-y-6 bg-[#080808] border border-white/5 p-8 rounded-[32px]">
                                                 <div className="space-y-2 group">
-                                                    <label className="text-[9px] font-black text-zinc-500 uppercase ml-2 tracking-widest">Valor Total (R$)</label>
+                                                    <label className="text-[9px] font-black text-zinc-500 uppercase ml-2 tracking-widest">Valor Base do Contrato (R$)</label>
                                                     <input type="number" value={financeData.total_value} onChange={(e) => setFinanceData({ ...financeData, total_value: Number(e.target.value) })} className="w-full bg-black border border-white/10 rounded-2xl px-5 py-3 text-sm font-bold text-white focus:border-synx outline-none transition-all" />
                                                 </div>
                                                 <div className="space-y-2 group">
-                                                    <label className="text-[9px] font-black text-zinc-500 uppercase ml-2 tracking-widest">MRR / Manutenção (R$)</label>
+                                                    <label className="text-[9px] font-black text-zinc-500 uppercase ml-2 tracking-widest">MRR / Manutenção Mensal (R$)</label>
                                                     <input type="number" value={financeData.maintenance_value} onChange={(e) => setFinanceData({ ...financeData, maintenance_value: Number(e.target.value) })} className="w-full bg-black border border-white/10 rounded-2xl px-5 py-3 text-sm font-bold text-white focus:border-synx outline-none transition-all" />
                                                 </div>
                                                 <div className="space-y-2 group">
-                                                    <label className="text-[9px] font-black text-zinc-500 uppercase ml-2 tracking-widest">Modelo de Cobrança</label>
+                                                    <label className="text-[9px] font-black text-zinc-500 uppercase ml-2 tracking-widest">Regra de Faturamento</label>
                                                     <select value={financeData.payment_model} onChange={(e) => setFinanceData({ ...financeData, payment_model: e.target.value })} className="w-full bg-black border border-white/10 rounded-2xl px-5 py-3 text-sm font-bold text-zinc-300 focus:border-synx outline-none transition-all appearance-none">
                                                         <option value="50/50">50% Sinal / 50% Entrega</option>
-                                                        <option value="custom">Customizado (Manual)</option>
+                                                        <option value="custom">Manual (Criar parcelas abaixo)</option>
                                                     </select>
                                                 </div>
-                                                <button onClick={saveFinanceSettings} disabled={isSavingFinance} className="w-full bg-white/5 hover:bg-synx hover:text-black border border-white/10 text-white py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all mt-4">
-                                                    {isSavingFinance ? "Salvando..." : "Gravar Parâmetros"}
-                                                </button>
+
+                                                <div className="flex gap-2 mt-4">
+                                                    <button onClick={saveFinanceSettings} disabled={isSavingFinance} className="flex-1 bg-white/5 hover:bg-white/10 border border-white/10 text-white py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all">
+                                                        {isSavingFinance ? "Salvando..." : "Salvar Setup"}
+                                                    </button>
+                                                    {financeData.payment_model === '50/50' && (
+                                                        <button onClick={generateInstallments} className="flex-1 bg-synx/10 hover:bg-synx border border-synx/20 hover:border-synx text-synx hover:text-black py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all shadow-[0_0_15px_rgba(16,185,129,0.1)]">
+                                                            Gerar 50/50
+                                                        </button>
+                                                    )}
+                                                </div>
                                             </div>
                                         </div>
 
-                                        {/* COLUNA 2: ESTEIRA DE COBRANÇA */}
-                                        <div className="space-y-8">
-                                            <div className="flex justify-between items-center"><h3 className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.4em]">Esteira de Parcelas</h3>
-                                                <button onClick={generateInstallments} className="text-[9px] font-black text-synx border-b border-synx/30 pb-0.5 hover:border-synx uppercase tracking-widest transition-all">Gerar Auto (50/50)</button>
+                                        {/* COLUNA DIREITA: LIVRO CAIXA */}
+                                        <div className="space-y-6">
+                                            <div className="flex justify-between items-center">
+                                                <h3 className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.4em] flex items-center gap-2"><Banknote size={12} /> Livro Caixa (Faturas)</h3>
+                                                <button onClick={() => setIsAddingCustomInstallment(!isAddingCustomInstallment)} className="text-synx bg-synx/10 hover:bg-synx hover:text-black p-2 rounded-lg transition-all border border-synx/20" title="Criar Fatura Manual">
+                                                    <PlusCircle size={16} />
+                                                </button>
                                             </div>
-                                            <div className="space-y-4">
-                                                {installments.length === 0 && <p className="text-xs font-mono text-zinc-600 border border-dashed border-white/10 p-6 rounded-3xl text-center">Nenhuma fatura lançada.</p>}
+
+                                            {/* FORMULÁRIO RÁPIDO PARA FATURA MANUAL */}
+                                            {isAddingCustomInstallment && (
+                                                <form onSubmit={handleAddCustomInstallment} className="p-5 bg-synx/5 border border-synx/20 rounded-[24px] space-y-4 animate-in slide-in-from-top-2">
+                                                    <input required type="text" placeholder="Descrição (Ex: Sinal, MRR Março)" className="w-full bg-black border border-white/10 rounded-xl px-4 py-2.5 text-xs font-bold text-white focus:border-synx outline-none" value={newCustomInstallment.description} onChange={(e) => setNewCustomInstallment({ ...newCustomInstallment, description: e.target.value })} />
+                                                    <div className="flex gap-2">
+                                                        <input required type="number" placeholder="Valor (R$)" className="flex-1 bg-black border border-white/10 rounded-xl px-4 py-2.5 text-xs font-bold text-white focus:border-synx outline-none" value={newCustomInstallment.amount} onChange={(e) => setNewCustomInstallment({ ...newCustomInstallment, amount: e.target.value })} />
+                                                        <button type="submit" className="bg-synx text-black px-4 rounded-xl text-[10px] font-black uppercase tracking-widest hover:brightness-110">Injetar</button>
+                                                    </div>
+                                                </form>
+                                            )}
+
+                                            <div className="space-y-3 max-h-[400px] overflow-y-auto custom-scrollbar pr-2">
+                                                {installments.length === 0 && <p className="text-[10px] font-mono text-zinc-600 border border-dashed border-white/10 p-8 rounded-[24px] text-center">Nenhuma fatura lançada nesta operação.</p>}
+
                                                 {installments.map((inst) => (
-                                                    <div key={inst.id} className={`p-5 rounded-[24px] border transition-all flex items-center justify-between group ${inst.status === 'paid' ? 'bg-synx/5 border-synx/30' : 'bg-[#080808] border-white/10 hover:border-white/30'}`}>
-                                                        <div>
-                                                            <p className={`text-xs font-black uppercase tracking-wider ${inst.status === 'paid' ? 'text-synx' : 'text-white'}`}>{inst.description}</p>
-                                                            <p className="text-[10px] font-mono text-zinc-500 mt-1">R$ {Number(inst.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                                                    <div key={inst.id} className={`p-4 rounded-[20px] border transition-all flex items-center justify-between group ${inst.status === 'paid' ? 'bg-gradient-to-r from-synx/10 to-transparent border-synx/30' : 'bg-[#080808] border-white/10 hover:border-white/30'}`}>
+                                                        <div className="flex items-center gap-4">
+                                                            <button onClick={() => markInstallmentPaid(inst.id, inst.status)} className={`w-10 h-10 rounded-2xl flex items-center justify-center transition-all shadow-lg ${inst.status === 'paid' ? 'bg-synx text-black shadow-synx/20' : 'bg-white/5 text-zinc-600 hover:bg-white/10 hover:text-white border border-white/5'}`}>
+                                                                <CheckCircle2 size={16} />
+                                                            </button>
+                                                            <div>
+                                                                <p className={`text-xs font-black uppercase tracking-wider ${inst.status === 'paid' ? 'text-synx' : 'text-white'}`}>{inst.description}</p>
+                                                                <div className="flex items-center gap-2 mt-1">
+                                                                    <span className="text-[11px] font-mono text-zinc-400">R$ {Number(inst.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                                                                    {inst.status === 'paid' && <span className="bg-synx/20 text-synx text-[8px] font-black px-1.5 py-0.5 rounded uppercase tracking-widest">Pago</span>}
+                                                                </div>
+                                                            </div>
                                                         </div>
-                                                        <button onClick={() => markInstallmentPaid(inst.id, inst.status)} className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all ${inst.status === 'paid' ? 'bg-synx text-black' : 'bg-white/5 text-zinc-600 hover:bg-white/10 hover:text-white'}`}>
-                                                            <CheckCircle2 size={14} />
+                                                        <button onClick={() => handleDeleteInstallment(inst.id)} className="text-zinc-600 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all p-2 bg-black rounded-lg border border-white/5 hover:border-red-500/30">
+                                                            <Trash size={14} />
                                                         </button>
                                                     </div>
                                                 ))}
                                             </div>
                                         </div>
-
                                     </div>
 
-                                    {/* COFRE BUROCRÁTICO (UPLOAD NF E CONTRATO) */}
-                                    <div className="mt-12 border-t border-white/5 pt-12">
-                                        <h3 className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.4em] mb-8">Cofre Burocrático (NFs e Contratos)</h3>
-                                        <div className="grid grid-cols-2 gap-6 mb-8">
-                                            <label className="border border-dashed border-white/10 hover:border-synx/50 transition-all rounded-[32px] p-8 flex flex-col items-center justify-center bg-[#080808] cursor-pointer group">
-                                                <input type="file" className="hidden" onChange={(e) => handleFinanceDocUpload(e, 'contract')} disabled={isUploadingDoc} />
-                                                <FileCheck size={24} className="text-zinc-600 group-hover:text-synx mb-3 transition-colors" />
-                                                <span className="text-[10px] font-black text-white uppercase tracking-widest">Subir Contrato</span>
+                                    {/* COFRE BUROCRÁTICO (DOCUMENTOS) */}
+                                    <div className="mt-8 border-t border-white/5 pt-10">
+                                        <h3 className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.4em] mb-6 flex items-center gap-2"><FileCheck size={12} /> Cofre de Documentos (Contratos & NFs)</h3>
+
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+                                            <label className="col-span-2 border border-dashed border-white/10 hover:border-synx/50 transition-all rounded-[24px] p-6 flex items-center justify-center gap-4 bg-[#080808] cursor-pointer group">
+                                                <input type="file" className="hidden" accept=".pdf,.png,.jpg,.jpeg,.csv" onChange={(e) => handleFinanceDocUpload(e, 'contract')} disabled={isUploadingDoc} />
+                                                <div className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center group-hover:bg-synx/10 transition-colors"><FileCheck size={18} className="text-zinc-500 group-hover:text-synx" /></div>
+                                                <div>
+                                                    <p className="text-xs font-black text-white uppercase tracking-widest">Subir Contrato</p>
+                                                    <p className="text-[8px] font-mono text-zinc-600 uppercase mt-0.5">PDF, IMG, CSV</p>
+                                                </div>
                                             </label>
-                                            <label className="border border-dashed border-white/10 hover:border-synx/50 transition-all rounded-[32px] p-8 flex flex-col items-center justify-center bg-[#080808] cursor-pointer group">
-                                                <input type="file" className="hidden" onChange={(e) => handleFinanceDocUpload(e, 'invoice')} disabled={isUploadingDoc} />
-                                                <Receipt size={24} className="text-zinc-600 group-hover:text-synx mb-3 transition-colors" />
-                                                <span className="text-[10px] font-black text-white uppercase tracking-widest">Subir Nota Fiscal (NF)</span>
+
+                                            <label className="col-span-2 border border-dashed border-white/10 hover:border-synx/50 transition-all rounded-[24px] p-6 flex items-center justify-center gap-4 bg-[#080808] cursor-pointer group">
+                                                <input type="file" className="hidden" accept=".pdf,.png,.jpg,.jpeg,.csv" onChange={(e) => handleFinanceDocUpload(e, 'invoice')} disabled={isUploadingDoc} />
+                                                <div className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center group-hover:bg-synx/10 transition-colors"><Receipt size={18} className="text-zinc-500 group-hover:text-synx" /></div>
+                                                <div>
+                                                    <p className="text-xs font-black text-white uppercase tracking-widest">Subir Nota (NF)</p>
+                                                    <p className="text-[8px] font-mono text-zinc-600 uppercase mt-0.5">Comprovantes & Notas</p>
+                                                </div>
                                             </label>
                                         </div>
 
-                                        <div className="space-y-3">
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            {financeDocs.length === 0 && <p className="col-span-2 text-[10px] font-mono text-zinc-700 uppercase tracking-widest text-center py-4">O cofre está vazio.</p>}
                                             {financeDocs.map((doc) => (
-                                                <a key={doc.id} href={doc.file_url} target="_blank" rel="noreferrer" className="flex items-center gap-4 p-4 bg-[#080808] border border-white/5 rounded-2xl hover:border-white/20 transition-all">
-                                                    <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-zinc-400"><FileText size={16} /></div>
-                                                    <div className="flex-1"><p className="text-xs font-bold text-white">{doc.file_name}</p><p className="text-[9px] font-mono text-synx uppercase mt-1">{doc.doc_type === 'contract' ? 'Contrato Assinado' : 'Nota Fiscal Emitida'}</p></div>
-                                                    <ArrowUpRight size={16} className="text-zinc-600" />
-                                                </a>
+                                                <div key={doc.id} className="flex items-center gap-4 p-4 bg-[#080808] border border-white/5 rounded-2xl hover:border-white/20 transition-all group">
+                                                    <a href={doc.file_url} target="_blank" rel="noreferrer" className="flex-1 flex items-center gap-4">
+                                                        <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-zinc-400"><FileText size={16} /></div>
+                                                        <div className="flex-1 overflow-hidden">
+                                                            <p className="text-xs font-bold text-white truncate">{doc.file_name}</p>
+                                                            <p className="text-[9px] font-mono text-synx uppercase mt-1">{doc.doc_type === 'contract' ? 'Contrato' : 'Nota Fiscal'}</p>
+                                                        </div>
+                                                        <ArrowUpRight size={16} className="text-zinc-600 group-hover:text-white" />
+                                                    </a>
+                                                    <button onClick={() => handleDeleteFinanceDoc(doc.id)} className="p-2 text-zinc-600 hover:text-red-500 bg-white/5 rounded-lg transition-colors"><Trash size={14} /></button>
+                                                </div>
                                             ))}
                                         </div>
                                     </div>
@@ -484,7 +635,36 @@ export default function ProjectsBoard() {
                                 </div>
                             )}
 
-                            {/* TABS ANTIGAS OMITIDAS NO RESUMO, MAS MANTIDAS NO CÓDIGO FINAL */}
+                            {/* 🔹 TAB REPOSITÓRIO (GIT) */}
+                            {activeTab === "repositorio" && (
+                                <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
+                                    <div className="flex justify-between items-center">
+                                        <h3 className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.4em] flex items-center gap-2">
+                                            <Github size={14} className="text-zinc-500" /> Integração de Código
+                                        </h3>
+                                        <button onClick={async () => {
+                                            const input = document.getElementById("git-input") as HTMLInputElement;
+                                            await supabase.from("projects").update({ repository_url: input.value }).eq("id", selectedProject.id);
+                                            setProjects((prev) => prev.map(p => p.id === selectedProject.id ? { ...p, repository_url: input.value } : p));
+                                            alert("Repositório salvo com sucesso!");
+                                        }} className="bg-synx text-black px-6 py-2.5 rounded-xl text-[9px] font-black uppercase tracking-widest hover:brightness-110 shadow-[0_0_20px_rgba(16,185,129,0.2)]">
+                                            Salvar Link
+                                        </button>
+                                    </div>
+
+                                    <div className="bg-[#080808] border border-white/5 rounded-[32px] p-8">
+                                        <label className="text-[9px] font-black text-zinc-500 uppercase ml-2 tracking-widest block mb-4">Link do Repositório (GitHub / GitLab)</label>
+                                        <input id="git-input" type="url" defaultValue={selectedProject.repository_url || ""} placeholder="https://github.com/seu-usuario/projeto..." className="w-full bg-black border border-white/10 rounded-2xl px-6 py-4 text-sm font-mono text-white focus:border-synx outline-none transition-all mb-6" />
+
+                                        <a href={selectedProject.repository_url || "#"} target="_blank" rel="noreferrer" className={`flex items-center justify-center gap-3 w-full p-4 rounded-2xl text-xs font-black uppercase tracking-widest transition-all ${selectedProject.repository_url ? 'bg-white/5 hover:bg-white/10 text-white border border-white/10' : 'bg-white/[0.02] text-zinc-600 border border-white/5 pointer-events-none'}`}>
+                                            <Github size={16} /> Abrir Repositório
+                                            <ArrowUpRight size={14} />
+                                        </a>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* 🔹 TAREFAS */}
                             {activeTab === "tarefas" && (
                                 <div className="space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
                                     <div className="grid grid-cols-3 gap-6">
@@ -514,6 +694,7 @@ export default function ProjectsBoard() {
                                 </div>
                             )}
 
+                            {/* 🔹 BRIEFING */}
                             {activeTab === "briefing" && (
                                 <div className="h-full flex flex-col space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
                                     <div className="flex justify-between items-center"><div className="flex items-center gap-3"><AlignLeft className="text-synx" size={18} /><span className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.3em]">Encrypted_Notes</span></div><button onClick={saveDescription} disabled={isSavingDesc} className="bg-synx text-black px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:brightness-110 shadow-[0_0_20px_rgba(16,185,129,0.2)]">{isSavingDesc ? 'Sincronizando...' : 'Commit_Changes'}</button></div>
@@ -521,6 +702,7 @@ export default function ProjectsBoard() {
                                 </div>
                             )}
 
+                            {/* 🔹 ARQUIVOS */}
                             {activeTab === "arquivos" && (
                                 <div className="space-y-10 animate-in fade-in slide-in-from-bottom-4 duration-700">
                                     <input type="file" id="file-upload" className="hidden" onChange={handleFileUpload} disabled={isLoadingTasks} />
@@ -540,36 +722,36 @@ export default function ProjectsBoard() {
                                 </div>
                             )}
 
-                            {activeTab === "membros" && (
-                                <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
-                                    <div className="flex justify-between items-center"><h3 className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.4em]">Operadores_Ativos</h3><button className="bg-white/5 hover:bg-synx hover:text-black p-2 rounded-xl border border-white/10"><Plus size={16} /></button></div>
-                                    <div className="grid grid-cols-1 gap-4">
-                                        {members.map((m) => (
-                                            <div key={m.id} className="flex items-center gap-4 p-5 bg-white/[0.02] border border-white/5 rounded-[32px] group hover:border-synx/30 transition-all">
-                                                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-synx to-emerald-600 flex items-center justify-center text-black font-black text-sm shadow-[0_0_15px_rgba(16,185,129,0.2)]">{m.users?.full_name?.charAt(0) || "U"}</div>
-                                                <div className="flex-1"><p className="text-sm font-black text-white italic uppercase tracking-tighter">{m.users?.full_name || "Membro"}</p><p className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest">{m.role} • Online</p></div>
-                                                <div className="w-2 h-2 rounded-full bg-synx animate-pulse" />
-                                            </div>
-                                        ))}
-                                        {members.length === 0 && <div className="py-20 text-center border border-dashed border-white/5 rounded-[32px]"><p className="text-[10px] font-mono text-zinc-700 uppercase tracking-widest">Apenas tu no comando.</p></div>}
-                                    </div>
-                                </div>
-                            )}
-
                         </div>
                     </div>
                 </>
             )}
 
-            {/* MODAL NOVO ESCOPO */}
+            {/* 🔹 MODAL NOVO ESCOPO */}
             {isModalOpen && (
                 <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[300] flex items-center justify-center p-6 animate-in fade-in">
                     <div className="bg-[#0A0A0A] border border-white/10 w-full max-w-md rounded-[40px] p-10 shadow-2xl animate-in zoom-in-95">
-                        <div className="flex justify-between items-start mb-8 text-white"><h2 className="text-2xl font-black italic uppercase tracking-tighter">Nova Operação</h2><button onClick={() => setIsModalOpen(false)}><X size={20} /></button></div>
+                        <div className="flex justify-between items-start mb-8 text-white">
+                            <h2 className="text-2xl font-black italic uppercase tracking-tighter">Nova Operação</h2>
+                            <button onClick={() => setIsModalOpen(false)}><X size={20} className="text-zinc-500 hover:text-white transition-colors" /></button>
+                        </div>
+
                         <form onSubmit={handleCreateProject} className="space-y-6">
-                            <input required type="text" placeholder="Nome do Projeto" className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 text-sm font-bold text-white focus:border-synx outline-none" value={newProject.name} onChange={(e) => setNewProject({ ...newProject, name: e.target.value })} />
-                            <input required type="text" placeholder="Cliente" className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 text-sm font-bold text-white focus:border-synx outline-none" value={newProject.client} onChange={(e) => setNewProject({ ...newProject, client: e.target.value })} />
-                            <button type="submit" className="w-full bg-synx text-black py-5 rounded-2xl font-black uppercase text-xs tracking-widest hover:brightness-110">Instanciar Projeto</button>
+                            <div className="space-y-2 group">
+                                <label className="text-[9px] font-black text-zinc-500 uppercase ml-2 tracking-widest">Nome do Projeto</label>
+                                <input required type="text" placeholder="Ex: E-commerce Elite" className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 text-sm font-bold text-white focus:border-synx outline-none transition-all" value={newProject.name} onChange={(e) => setNewProject({ ...newProject, name: e.target.value })} />
+                            </div>
+
+                            <div className="space-y-2 group">
+                                <label className="text-[9px] font-black text-zinc-500 uppercase ml-2 tracking-widest">Selecione o Cliente</label>
+                                <select required className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 text-sm font-bold text-zinc-300 focus:border-synx outline-none transition-all appearance-none" value={newProject.client_id} onChange={(e) => setNewProject({ ...newProject, client_id: e.target.value })}>
+                                    <option value="" disabled>Selecione um Cliente...</option>
+                                    {clients.map(c => <option key={c.id} value={c.id}>{c.full_name || c.name}</option>)}
+                                </select>
+                                <p className="text-[9px] font-mono text-zinc-600 mt-2 ml-2">Não encontrou? Cadastre na aba de "Usuários".</p>
+                            </div>
+
+                            <button type="submit" className="w-full bg-synx text-black py-5 rounded-2xl font-black uppercase text-xs tracking-widest hover:brightness-110 shadow-[0_0_20px_rgba(16,185,129,0.2)] mt-4">Instanciar Projeto</button>
                         </form>
                     </div>
                 </div>

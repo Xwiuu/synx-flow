@@ -3,7 +3,10 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import { Terminal, CheckCircle2, Circle, Lock, Zap, FileText, Image as ImageIcon, Download, Activity } from "lucide-react";
+import {
+    Terminal, CheckCircle2, Circle, Lock, Zap, FileText, Image as ImageIcon,
+    Download, Activity, Wallet, Banknote, Clock, AlertTriangle, FileCheck, Receipt
+} from "lucide-react";
 
 export default function ClientTrackingPortal() {
     const params = useParams();
@@ -12,6 +15,8 @@ export default function ClientTrackingPortal() {
     const [project, setProject] = useState<any>(null);
     const [tasks, setTasks] = useState<any[]>([]);
     const [attachments, setAttachments] = useState<any[]>([]);
+    const [installments, setInstallments] = useState<any[]>([]);
+    const [financeDocs, setFinanceDocs] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
 
     const phases = ["Briefing", "Design", "Desenvolvimento", "QA / Performance", "Aguard. Cliente", "Entregue"];
@@ -23,7 +28,7 @@ export default function ClientTrackingPortal() {
     const fetchClientData = async () => {
         setLoading(true);
         try {
-            // Busca o projeto pelo código secreto
+            // 1. Busca o projeto pelo código secreto
             const { data: projData, error } = await supabase
                 .from("projects")
                 .select("*")
@@ -33,13 +38,21 @@ export default function ClientTrackingPortal() {
             if (error || !projData) throw new Error("Operação não encontrada ou link inválido.");
             setProject(projData);
 
-            // Busca o progresso (tarefas)
+            // 2. Busca o progresso (tarefas)
             const { data: taskData } = await supabase.from("tasks").select("*").eq("project_id", projData.id);
             if (taskData) setTasks(taskData);
 
-            // Busca os arquivos liberados
+            // 3. Busca os arquivos do Vault normal (Design, Assets)
             const { data: attachData } = await supabase.from("attachments").select("*").eq("project_id", projData.id);
             if (attachData) setAttachments(attachData);
+
+            // 4. Busca as Faturas (Financeiro)
+            const { data: instData } = await supabase.from("finance_installments").select("*").eq("project_id", projData.id).order("created_at", { ascending: true });
+            if (instData) setInstallments(instData);
+
+            // 5. Busca os Contratos e Notas Fiscais
+            const { data: fDocsData } = await supabase.from("finance_docs").select("*").eq("project_id", projData.id).order("created_at", { ascending: false });
+            if (fDocsData) setFinanceDocs(fDocsData);
 
         } catch (err) {
             console.error(err);
@@ -66,9 +79,14 @@ export default function ClientTrackingPortal() {
         </div>
     );
 
+    // 🔹 CÁLCULOS
     const completedTasks = tasks.filter(t => t.status === 'completed').length;
     const progressPercent = tasks.length > 0 ? Math.round((completedTasks / tasks.length) * 100) : 0;
     const currentPhaseIndex = phases.findIndex(p => p.includes(project.phase?.split(" ")[0] || "Briefing"));
+
+    const totalAmount = project.total_value > 0 ? project.total_value : installments.reduce((acc, curr) => acc + Number(curr.amount), 0);
+    const paidAmount = installments.filter(i => i.status === 'paid').reduce((acc, curr) => acc + Number(curr.amount), 0);
+    const financeProgress = totalAmount > 0 ? Math.round((paidAmount / totalAmount) * 100) : 0;
 
     return (
         <div className="min-h-screen w-full bg-[#020202] text-white selection:bg-synx selection:text-black pb-20">
@@ -77,7 +95,7 @@ export default function ClientTrackingPortal() {
             <div className="fixed top-0 left-0 w-full h-[500px] bg-gradient-to-b from-synx/5 to-transparent pointer-events-none" />
             <div className="fixed top-[-20%] left-[20%] w-[600px] h-[600px] bg-synx/10 rounded-full blur-[150px] pointer-events-none" />
 
-            <div className="max-w-[1000px] mx-auto pt-12 px-6 relative z-10">
+            <div className="max-w-[1200px] mx-auto pt-12 px-6 relative z-10">
 
                 {/* HEADER BRANDING */}
                 <header className="flex items-center justify-between mb-16 animate-in fade-in slide-in-from-top-4 duration-700">
@@ -119,7 +137,6 @@ export default function ClientTrackingPortal() {
 
                     <div className="relative flex justify-between">
                         <div className="absolute top-1/2 left-0 w-full h-[2px] bg-white/5 -translate-y-1/2 rounded-full" />
-
                         <div
                             className="absolute top-1/2 left-0 h-[2px] bg-synx -translate-y-1/2 rounded-full shadow-[0_0_10px_#10b981] transition-all duration-1000"
                             style={{ width: `${Math.max(0, (currentPhaseIndex / (phases.length - 1)) * 100)}%` }}
@@ -136,7 +153,7 @@ export default function ClientTrackingPortal() {
                                         }`}>
                                         {isPast ? <CheckCircle2 size={14} /> : isActive ? <Zap size={14} className="animate-pulse" /> : <Circle size={10} />}
                                     </div>
-                                    <span className={`absolute -bottom-8 w-24 text-center text-[9px] font-black uppercase tracking-widest transition-colors ${isActive ? 'text-synx' : isPast ? 'text-zinc-400' : 'text-zinc-700'
+                                    <span className={`absolute -bottom-8 w-max text-center text-[9px] font-black uppercase tracking-widest transition-colors ${isActive ? 'text-synx' : isPast ? 'text-zinc-400' : 'text-zinc-700'
                                         }`}>
                                         {phase}
                                     </span>
@@ -146,8 +163,8 @@ export default function ClientTrackingPortal() {
                     </div>
                 </div>
 
-                {/* 🔹 MÉTRICAS E VAULT */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-10 animate-in fade-in slide-in-from-bottom-4 duration-700 delay-300">
+                {/* 🔹 GRIDS DE INFORMAÇÃO: ENGENHARIA E FINANCEIRO */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 animate-in fade-in slide-in-from-bottom-4 duration-700 delay-300">
 
                     {/* PROGRESSO TÉCNICO */}
                     <div className="bg-[#050505] border border-white/10 p-10 rounded-[40px] relative overflow-hidden group hover:border-white/20 transition-all">
@@ -167,31 +184,109 @@ export default function ClientTrackingPortal() {
                         </p>
                     </div>
 
-                    {/* VAULT DO CLIENTE */}
+                    {/* PROGRESSO FINANCEIRO */}
+                    <div className="bg-[#050505] border border-white/10 p-10 rounded-[40px] relative overflow-hidden group hover:border-white/20 transition-all">
+                        <h3 className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.3em] mb-8 flex items-center gap-2">
+                            <Wallet size={14} className="text-synx" /> Situação Financeira
+                        </h3>
+                        <div className="flex items-end gap-4 mb-6">
+                            <span className="text-7xl font-black italic tracking-tighter text-white leading-none">{financeProgress}%</span>
+                            <span className="text-xs font-mono text-zinc-500 uppercase tracking-widest mb-2">Quitado</span>
+                        </div>
+                        <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden p-[1px]">
+                            <div
+                                className="h-full bg-gradient-to-r from-synx to-teal-400 rounded-full transition-all duration-1000 shadow-[0_0_15px_rgba(16,185,129,0.5)]"
+                                style={{ width: `${financeProgress}%` }}
+                            />
+                        </div>
+                        <p className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mt-6">
+                            Total do Contrato: R$ {Number(totalAmount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        </p>
+                    </div>
+
+                    {/* EXTRATO (FATURAS) */}
                     <div className="bg-[#050505] border border-white/10 p-10 rounded-[40px]">
                         <h3 className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.3em] mb-8 flex items-center gap-2">
-                            <Lock size={12} className="text-synx" /> Arquivos Liberados (Vault)
+                            <Banknote size={14} className="text-zinc-500" /> Extrato de Faturas
                         </h3>
-
-                        <div className="space-y-4 max-h-[200px] overflow-y-auto custom-scrollbar pr-2">
-                            {attachments.length === 0 ? (
+                        <div className="space-y-4 max-h-[300px] overflow-y-auto custom-scrollbar pr-2">
+                            {installments.length === 0 ? (
                                 <div className="py-10 text-center border border-dashed border-white/5 rounded-3xl">
-                                    <p className="text-[9px] font-mono text-zinc-600 uppercase tracking-widest">Nenhum asset liberado ainda.</p>
+                                    <p className="text-[9px] font-mono text-zinc-600 uppercase tracking-widest">Nenhuma fatura lançada.</p>
                                 </div>
                             ) : (
-                                attachments.map((file) => (
-                                    <a key={file.id} href={file.file_url} target="_blank" rel="noreferrer" className="flex items-center gap-4 p-4 bg-white/[0.02] border border-white/5 rounded-2xl hover:border-synx/30 transition-all group">
-                                        <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-synx border border-white/10 group-hover:bg-synx/10 transition-colors">
-                                            {file.file_type?.includes('image') ? <ImageIcon size={16} /> : <FileText size={16} />}
+                                installments.map((inst) => (
+                                    <div key={inst.id} className="flex items-center justify-between p-5 bg-white/[0.02] border border-white/5 rounded-2xl">
+                                        <div className="flex items-center gap-4">
+                                            <div className={`w-8 h-8 rounded-xl flex items-center justify-center border ${inst.status === 'paid' ? 'bg-synx/10 border-synx/30 text-synx' : inst.status === 'overdue' ? 'bg-red-500/10 border-red-500/30 text-red-500' : 'bg-white/5 border-white/10 text-zinc-500'}`}>
+                                                {inst.status === 'paid' ? <CheckCircle2 size={14} /> : inst.status === 'overdue' ? <AlertTriangle size={14} /> : <Clock size={14} />}
+                                            </div>
+                                            <div>
+                                                <p className="text-xs font-bold text-white uppercase">{inst.description}</p>
+                                                <p className="text-[10px] font-mono text-zinc-400 mt-1">R$ {Number(inst.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                                            </div>
                                         </div>
-                                        <div className="flex-1 overflow-hidden">
-                                            <p className="text-xs font-bold text-white truncate">{file.file_name}</p>
-                                        </div>
-                                        <Download size={16} className="text-zinc-600 group-hover:text-synx transition-colors" />
-                                    </a>
+                                        <span className={`text-[8px] font-black uppercase tracking-widest px-2 py-1 rounded-md border ${inst.status === 'paid' ? 'bg-synx/20 text-synx border-synx/20' : inst.status === 'overdue' ? 'bg-red-500/20 text-red-500 border-red-500/20' : 'bg-white/10 text-zinc-400 border-white/5'}`}>
+                                            {inst.status === 'paid' ? 'PAGO' : inst.status === 'overdue' ? 'ATRASADO' : 'PENDENTE'}
+                                        </span>
+                                    </div>
                                 ))
                             )}
                         </div>
+                    </div>
+
+                    {/* COFRE DO CLIENTE (DOCUMENTOS E ASSETS) */}
+                    <div className="bg-[#050505] border border-white/10 p-10 rounded-[40px] flex flex-col gap-8">
+
+                        {/* DOCUMENTOS FINANCEIROS */}
+                        <div>
+                            <h3 className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.3em] mb-6 flex items-center gap-2">
+                                <FileCheck size={14} className="text-zinc-500" /> Documentos Oficiais
+                            </h3>
+                            <div className="space-y-3">
+                                {financeDocs.length === 0 ? (
+                                    <p className="text-[9px] font-mono text-zinc-600 uppercase tracking-widest p-4 border border-dashed border-white/5 rounded-2xl text-center">Nenhum documento anexado.</p>
+                                ) : (
+                                    financeDocs.map((doc) => (
+                                        <a key={doc.id} href={doc.file_url} target="_blank" rel="noreferrer" className="flex items-center gap-4 p-4 bg-white/[0.02] border border-white/5 rounded-2xl hover:border-synx/30 transition-all group">
+                                            <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-zinc-400 group-hover:text-synx transition-colors">
+                                                {doc.doc_type === 'contract' ? <FileText size={16} /> : <Receipt size={16} />}
+                                            </div>
+                                            <div className="flex-1 overflow-hidden">
+                                                <p className="text-xs font-bold text-white truncate">{doc.file_name}</p>
+                                                <p className="text-[9px] font-mono text-synx uppercase mt-1">{doc.doc_type === 'contract' ? 'Contrato' : 'Nota Fiscal'}</p>
+                                            </div>
+                                            <Download size={16} className="text-zinc-600 group-hover:text-synx transition-colors" />
+                                        </a>
+                                    ))
+                                )}
+                            </div>
+                        </div>
+
+                        {/* ASSETS E ENTREGÁVEIS */}
+                        <div>
+                            <h3 className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.3em] mb-6 flex items-center gap-2">
+                                <Lock size={14} className="text-zinc-500" /> Arquivos Entregáveis
+                            </h3>
+                            <div className="space-y-3">
+                                {attachments.length === 0 ? (
+                                    <p className="text-[9px] font-mono text-zinc-600 uppercase tracking-widest p-4 border border-dashed border-white/5 rounded-2xl text-center">Nenhum asset liberado.</p>
+                                ) : (
+                                    attachments.map((file) => (
+                                        <a key={file.id} href={file.file_url} target="_blank" rel="noreferrer" className="flex items-center gap-4 p-4 bg-white/[0.02] border border-white/5 rounded-2xl hover:border-synx/30 transition-all group">
+                                            <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-zinc-400 group-hover:text-synx transition-colors">
+                                                {file.file_type?.includes('image') ? <ImageIcon size={16} /> : <FileText size={16} />}
+                                            </div>
+                                            <div className="flex-1 overflow-hidden">
+                                                <p className="text-xs font-bold text-white truncate">{file.file_name}</p>
+                                            </div>
+                                            <Download size={16} className="text-zinc-600 group-hover:text-synx transition-colors" />
+                                        </a>
+                                    ))
+                                )}
+                            </div>
+                        </div>
+
                     </div>
 
                 </div>
